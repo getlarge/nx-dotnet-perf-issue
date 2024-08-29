@@ -2,10 +2,12 @@
   "name": "@nx-dotnet-perf-issue/source",
   "version": "0.0.0",
   "license": "MIT",
-  "scripts": {},
+  "scripts": {
+    "prepare": "nx g @nx-dotnet/core:restore"
+  },
   "private": true,
-  "dependencies": {},
   "devDependencies": {
+    "@nx-dotnet/core": "^2.4.3",
     "@nx/js": "19.6.4",
     "@nx/workspace": "19.6.4",
     "nx": "19.6.4"
