@@ -1,0 +1,147 @@
+diff --git a/node_modules/@nx-dotnet/core/src/graph/create-dependencies.js b/node_modules/@nx-dotnet/core/src/graph/create-dependencies.js
+index 3d5649e..be390ae 100644
+--- a/node_modules/@nx-dotnet/core/src/graph/create-dependencies.js
++++ b/node_modules/@nx-dotnet/core/src/graph/create-dependencies.js
+@@ -6,19 +6,114 @@ const devkit_1 = require("@nx/devkit");
+ const node_path_1 = require("node:path");
+ const utils_1 = require("@nx-dotnet/utils");
+ const dotnet_1 = require("@nx-dotnet/dotnet");
++const perf_hooks = require('perf_hooks');
++const { performance, PerformanceObserver } = perf_hooks;
++
+ const dotnetClient = new dotnet_1.DotNetClient((0, dotnet_1.dotnetFactory)(), devkit_1.workspaceRoot);
+-const createDependencies = (ctxOrOpts, maybeCtx) => {
++
++const createDependencies = async (ctxOrOpts, maybeCtx) => {
+     // In Nx version 16.8 - 16.10, CreateDependencies had a single option - the context.
+     // In v17, the signature was updated to pass options first, and context second.
+     const ctx = maybeCtx ?? ctxOrOpts;
++    let dependencies = [];
++    const logs = [];
++    const obs = new PerformanceObserver((list) => {
++        const entries = list.getEntries();
++        entries.forEach((entry) => {
++            logs.push(`${entry.name}: ${entry.duration} milliseconds`);
++        });
++    });
++    obs.observe({ entryTypes: ['measure'] });
++    const rootMap = createProjectRootMappings(ctx.projects);
++    performance.mark(`start-create-dependencies`);
++
++    const parseProject = async (source) => {
++        const baseStartTaskName = `start-task-${source}`;
++        const baseEndTaskName = `end-task-${source}`;
++        performance.mark(baseStartTaskName);
++        const changed = ctx.filesToProcess.projectFileMap[source];
++        let hasRef = false
++
++        const getProjectReferences = async (file) => {
++            const { ext } = (0, node_path_1.parse)(file.file);
++            if (['.csproj', '.fsproj', '.vbproj'].includes(ext)) {
++                hasRef = true
++                const getProjectReferencesTask = `get-project-references-${file.file}`;
++                performance.mark(`${baseStartTaskName}-${getProjectReferencesTask}`);
++                const references = await dotnetClient.getProjectReferencesAsync(file.file);
++
++                performance.mark(`${baseEndTaskName}-${getProjectReferencesTask}`);
++                performance.measure(`Task ${source}-${getProjectReferencesTask} Execution Time`, `${baseStartTaskName}-${getProjectReferencesTask}`, `${baseEndTaskName}-${getProjectReferencesTask}`);
++
++                const newDeps = [];
++                for (const reference of references) {
++                    const project = resolveReferenceToProject((0, devkit_1.normalizePath)(reference), file.file, rootMap, ctx);
++                    if (project) {
++                        newDeps.push({
++                            source,
++                            target: project,
++                            type: devkit_1.DependencyType.static,
++                            sourceFile: file.file,
++                        });
++                    }
++                    else {
++                        console.warn(`Unable to resolve project for reference ${reference} in ${file.file}`);
++                    }
++                }
++                dependencies = dependencies.concat(newDeps);
++            }
++        }
++        await Promise.all(changed.map(getProjectReferences));
++        if (!changed.length || !hasRef) {
++            perf_hooks.performance.clearMarks(baseStartTaskName, `${baseStartTaskName}-get-project-references`, );
++        } else {
++            performance.mark(baseEndTaskName);
++            performance.measure(`Task ${source} Execution Time`, baseStartTaskName, baseEndTaskName);
++        }
++    }
++    await Promise.all(Object.keys(ctx.filesToProcess.projectFileMap).map(parseProject));
++
++    performance.mark(`end-create-dependencies`);
++    performance.measure(`Task Create Dependencies Execution Time`, `start-create-dependencies`, `end-create-dependencies`);
++    perf_hooks.performance.clearMarks();
++    perf_hooks.performance.clearMeasures();
++    obs.disconnect();
++    // devkit_1.logger.log(logs.join('\n'))
++    return dependencies;
++};
++const createDependenciesV1 = (ctxOrOpts, maybeCtx) => {
++    // In Nx version 16.8 - 16.10, CreateDependencies had a single option - the context.
++    // In v17, the signature was updated to pass options first, and context second.
++    const ctx = maybeCtx ?? ctxOrOpts;
++    const logs = []
++    const obs = new PerformanceObserver((list) => {
++        const entries = list.getEntries();
++        entries.forEach((entry) => {
++            logs.push(`${entry.name}: ${entry.duration} milliseconds`);
++        });
++        });
++    obs.observe({ entryTypes: ['measure'] });
++
+     let dependencies = [];
+     const rootMap = createProjectRootMappings(ctx.projects);
++    performance.mark(`start-create-dependencies`);
++
+     for (const source in ctx.filesToProcess.projectFileMap) {
++
+         const changed = ctx.filesToProcess.projectFileMap[source];
++        performance.mark(`start-task-${source}`);
++        let hasRef = false
+         for (const file of changed) {
+             const { ext } = (0, node_path_1.parse)(file.file);
+             if (['.csproj', '.fsproj', '.vbproj'].includes(ext)) {
++                hasRef = true
++                const getProjectReferencesTask = `get-project-references-${file.file}`;
++                performance.mark(`${baseStartTaskName}-${getProjectReferencesTask}`);
+                 const references = dotnetClient.getProjectReferences(file.file);
++
++                performance.mark(`${baseEndTaskName}-${getProjectReferencesTask}`);
++                performance.measure(`Task ${source}-${getProjectReferencesTask} Execution Time`, `${baseStartTaskName}-${getProjectReferencesTask}`, `${baseEndTaskName}-${getProjectReferencesTask}`);
++
+                 const newDeps = [];
+                 for (const reference of references) {
+                     const project = resolveReferenceToProject((0, devkit_1.normalizePath)(reference), file.file, rootMap, ctx);
+@@ -37,7 +132,17 @@ const createDependencies = (ctxOrOpts, maybeCtx) => {
+                 dependencies = dependencies.concat(newDeps);
+             }
+         }
++        if (!changed.length || !hasRef) {
++            perf_hooks.performance.clearMarks(`start-task-${source}`);
++        } else {
++            performance.mark(`end-task-${source}`);
++            performance.measure(`Task ${source} Execution Time`, `start-task-${source}`, `end-task-${source}`);
++        }
+     }
++    performance.mark(`end-create-dependencies`);
++    performance.measure(`Task Create Dependencies Execution Time`, `start-create-dependencies`, `end-create-dependencies`);
++    obs.disconnect();
++    devkit_1.logger.warn(logs.join('\n'));
+     return dependencies;
+ };
+ exports.createDependencies = createDependencies;
+@@ -88,7 +193,7 @@ function findProjectForPath(filePath, rootMap) {
+ }
+ function resolveReferenceToProject(reference, source, rootMap, context) {
+     const resolved = (0, node_path_1.resolve)(context.workspaceRoot, (0, node_path_1.dirname)(source), reference);
+-    console.log({ reference, source, resolved });
++    // console.log({ reference, source, resolved });
+     return findProjectForPath((0, node_path_1.relative)(context.workspaceRoot, resolved), rootMap);
+ }
+ //# sourceMappingURL=create-dependencies.js.map

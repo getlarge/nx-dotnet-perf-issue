@@ -11,5 +11,8 @@
     "@nx/js": "19.6.4",
     "@nx/workspace": "19.6.4",
     "nx": "19.6.4"
+  },
+  "dependencies": {
+    "patch-package": "^8.0.0"
   }
 }
